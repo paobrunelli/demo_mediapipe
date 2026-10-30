@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="icon.svg">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MediaPipe Hand – Demo taratura</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:#000; color:#eee; font-family:system-ui,sans-serif; }
+  #app { display:flex; flex-direction:column; height:100%; }
+  #stage { position:relative; flex:1; min-height:0; background:#111; }
+  canvas { width:100%; height:100%; object-fit:contain; display:block; }
+  video { display:none; }
+  #hud { position:absolute; left:8px; right:8px; top:8px; padding:8px 10px; border-radius:10px;
+         background:rgba(0,0,0,.6); font:14px/1.4 ui-monospace,monospace; white-space:pre-line; }
+  #bar { display:flex; gap:8px; padding:10px; flex-wrap:wrap; align-items:center; background:#181818;
+         padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
+  button { font-size:16px; padding:12px 18px; border:0; border-radius:10px; background:#2b7fff; color:#fff; }
+  button.stop { background:#e5484d; }
+  button.sec { background:#333; }
+  button:disabled { opacity:.4; }
+  label { font-size:13px; display:flex; align-items:center; gap:4px; }
+  select { font-size:15px; padding:8px; background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <video id="v" playsinline muted></video>
+    <div id="hud">Premi Avvia</div>
+  </div>
+  <div id="bar">
+    <button id="toggle">Avvia</button>
+    <button id="flip" class="sec">Cambia camera</button>
+    <label>P1 <select id="p1"></select></label>
+    <label>P2 <select id="p2"></select></label>
+  </div>
+</div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver, DrawingUtils }
+  from "./mp/vision_bundle.mjs";
+
+const NAMES = ["WRIST","THUMB_CMC","THUMB_MCP","THUMB_IP","THUMB_TIP","INDEX_MCP","INDEX_PIP","INDEX_DIP","INDEX_TIP",
+  "MIDDLE_MCP","MIDDLE_PIP","MIDDLE_DIP","MIDDLE_TIP","RING_MCP","RING_PIP","RING_DIP","RING_TIP",
+  "PINKY_MCP","PINKY_PIP","PINKY_DIP","PINKY_TIP"];
+
+const $ = id => document.getElementById(id);
+const video = $("v"), canvas = $("c"), ctx = canvas.getContext("2d"), hud = $("hud");
+const sel1 = $("p1"), sel2 = $("p2");
+for (const s of [sel1, sel2]) NAMES.forEach((n,i) => s.add(new Option(`${i} ${n}`, i)));
+sel1.value = 4; sel2.value = 8;   // pollice punta / indice punta
+
+let landmarker, stream, raf = 0, running = false, facing = "environment", lastTs = -1;
+
+async function initModel() {
+  const fileset = await FilesetResolver.forVisionTasks(
+    "./mp/wasm");
+  // modello locale se presente, altrimenti Google (poi messo in cache dal service worker)
+  const LOCAL = "./mp/hand_landmarker.task";
+  const REMOTE = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+  let modelUrl = REMOTE;
+  try { const r = await fetch(LOCAL, { method: "HEAD" }); if (r.ok) modelUrl = LOCAL; } catch (e) {}
+  const base = { modelAssetPath: modelUrl };
+  const opts = { runningMode: "VIDEO", numHands: 1,
+    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 };
+  try {
+    landmarker = await HandLandmarker.createFromOptions(fileset, { ...opts, baseOptions: { ...base, delegate: "GPU" } });
+  } catch (e) {
+    landmarker = await HandLandmarker.createFromOptions(fileset, { ...opts, baseOptions: { ...base, delegate: "CPU" } });
+  }
+}
+
+async function startCamera() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+}
+
+function stopCamera() {
+  cancelAnimationFrame(raf);
+  stream?.getTracks().forEach(t => t.stop());
+  stream = null; running = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function loop() {
+  if (!running) return;
+  const W = canvas.width, H = canvas.height;
+  const mirror = facing === "user";
+  ctx.save();
+  if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, W, H);
+
+  const ts = performance.now();
+  let text = "Nessuna mano rilevata";
+  if (ts !== lastTs && video.readyState >= 2) {
+    lastTs = ts;
+    const res = landmarker.detectForVideo(video, ts);
+    if (res.landmarks.length) {
+      const lm = res.landmarks[0];
+      const wl = res.worldLandmarks?.[0];
+      const du = new DrawingUtils(ctx);
+      du.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS, { color: "#00e5ff", lineWidth: Math.max(2, W / 400) });
+      du.drawLandmarks(lm, { color: "#ffffff", radius: Math.max(2, W / 300) });
+
+      const i = +sel1.value, j = +sel2.value;
+      const a = lm[i], b = lm[j];
+      const ax = a.x * W, ay = a.y * H, bx = b.x * W, by = b.y * H;
+
+      // linea + punti evidenziati
+      ctx.strokeStyle = "#ffd400"; ctx.lineWidth = Math.max(3, W / 250);
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      for (const [x, y, k] of [[ax, ay, i], [bx, by, j]]) {
+        ctx.fillStyle = "#ff3b30"; ctx.beginPath(); ctx.arc(x, y, Math.max(7, W / 110), 0, 7); ctx.fill();
+      }
+      ctx.restore();
+      // etichette (fuori dal flip, testo leggibile)
+      ctx.save();
+      ctx.font = `bold ${Math.round(W / 30)}px system-ui`; ctx.fillStyle = "#ffd400";
+      ctx.strokeStyle = "#000"; ctx.lineWidth = 4;
+      const lab = (x, y, t) => { const X = mirror ? W - x : x; ctx.strokeText(t, X + 12, y - 12); ctx.fillText(t, X + 12, y - 12); };
+      lab(ax, ay, String(i)); lab(bx, by, String(j));
+      ctx.restore();
+
+      const px = Math.hypot(bx - ax, by - ay);
+      const palm = Math.hypot((lm[9].x - lm[0].x) * W, (lm[9].y - lm[0].y) * H); // polso → MCP medio
+      let mm = "n/d";
+      if (wl) {
+        const d = Math.hypot(wl[i].x - wl[j].x, wl[i].y - wl[j].y, wl[i].z - wl[j].z) * 1000;
+        mm = d.toFixed(1) + " mm (stima 3D)";
+      }
+      const hand = res.handedness?.[0]?.[0];
+      text = `Mano: ${hand ? hand.categoryName + " " + (hand.score * 100).toFixed(0) + "%" : "?"}\n` +
+             `P${i}–P${j}: ${px.toFixed(1)} px\n` +
+             `Normalizzata (÷ polso-MCP medio): ${(px / palm).toFixed(3)}\n` +
+             `Metrica: ${mm}`;
+      hud.textContent = text;
+      raf = requestAnimationFrame(loop);
+      return;
+    }
+  }
+  ctx.restore();
+  hud.textContent = text;
+  raf = requestAnimationFrame(loop);
+}
+
+$("toggle").onclick = async () => {
+  const btn = $("toggle");
+  if (running) { stopCamera(); btn.textContent = "Avvia"; btn.classList.remove("stop"); hud.textContent = "Fermato"; return; }
+  try {
+    btn.disabled = true; hud.textContent = "Carico modello…";
+    if (!landmarker) await initModel();
+    await startCamera();
+    running = true; btn.textContent = "Stop"; btn.classList.add("stop");
+    loop();
+  } catch (e) { hud.textContent = "Errore: " + e.message; }
+  finally { btn.disabled = false; }
+};
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+  navigator.storage?.persist?.();
+}
+
+$("flip").onclick = async () => {
+  facing = facing === "user" ? "environment" : "user";
+  if (running) { stopCamera(); await startCamera(); running = true; loop(); }
+};
+</script>
+</body>
+</html>
