@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Qualità rilevamento MediaPipe</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<style>
+  /* Layout: setup a schermo intero con tre scelte grandi, poi vista camera a tutto schermo con pannello indicatori in basso */
+  :root {
+    --bg: #0d1117;
+    --panel: rgba(16, 22, 30, 0.86);
+    --card: #161d27;
+    --line: #2a3442;
+    --fg: #e8edf3;
+    --muted: #8b98a8;
+    --accent: #4fb3ff;
+    --ok: #3ddc84;
+    --warn: #ffb547;
+    --bad: #ff5d5d;
+    --left: #ff8a3d;
+    --right: #4fb3ff;
+    --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font); -webkit-tap-highlight-color: transparent; }
+  button { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+
+  /* ---------- Setup ---------- */
+  #setup {
+    min-height: 100%;
+    padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    display: flex; flex-direction: column; gap: 20px; max-width: 560px; margin: 0 auto;
+  }
+  h1 { font-size: 1.5rem; margin: 8px 0 0; text-wrap: balance; }
+  .sub { color: var(--muted); margin: 0; line-height: 1.45; }
+  .label { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 8px; }
+  .parts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .part {
+    background: var(--card); border: 2px solid var(--line); border-radius: 14px;
+    padding: 14px 8px; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .part svg { width: 44px; height: 44px; stroke: var(--fg); fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .part strong { font-size: 1rem; }
+  .part small { color: var(--muted); font-size: .72rem; text-align: center; line-height: 1.3; }
+  .part[aria-pressed="true"] { border-color: var(--accent); background: #13263a; }
+  .part[aria-pressed="true"] svg { stroke: var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .seg { flex: 1; min-width: 90px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; cursor: pointer; }
+  .seg[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .slider { display: flex; align-items: center; gap: 12px; }
+  .slider input { flex: 1; accent-color: var(--accent); }
+  .slider output { font-family: var(--mono); min-width: 3.5em; text-align: right; }
+  .select { width: 100%; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font: inherit; }
+  .check { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: .9rem; }
+  .check input { accent-color: var(--accent); width: 18px; height: 18px; }
+  #start {
+    background: var(--accent); color: #04121f; border: 0; border-radius: 12px; padding: 16px; font-weight: 700; font-size: 1.05rem; cursor: pointer;
+  }
+  #start:disabled { opacity: .5; }
+  .note { font-size: .8rem; color: var(--muted); line-height: 1.45; }
+  .err { color: var(--bad); font-size: .9rem; line-height: 1.4; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- Live ---------- */
+  #live { position: fixed; inset: 0; background: #000; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  #video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .topbar {
+    position: absolute; top: 0; left: 0; right: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: calc(env(safe-area-inset-top) + 10px) max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+    background: linear-gradient(rgba(0,0,0,.65), transparent);
+  }
+  .iconbtn { white-space: nowrap; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; cursor: pointer; }
+  .topbar .grow { flex: 1; }
+  .chip { white-space: nowrap; font-family: var(--mono); font-size: .78rem; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; }
+  #panel {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 12px max(12px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 12px) max(12px, env(safe-area-inset-left));
+    background: var(--panel); border-top: 1px solid var(--line); backdrop-filter: blur(6px);
+    display: grid; grid-template-columns: 1fr; gap: 10px; max-height: 45%; overflow-y: auto;
+  }
+  .side { min-width: 0; }
+  .side h3 { margin: 0 0 6px; font-size: .9rem; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; }
+  .dot.ok { background: var(--ok); } .dot.mid { background: var(--warn); }
+  .swatch { width: 10px; height: 3px; border-radius: 2px; }
+  .metric { display: grid; font-size: .74rem; grid-template-columns: 5.4em 1fr 2.8em; align-items: center; gap: 6px; font-size: .76rem; margin: 3px 0; }
+  .metric span:first-child { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar { height: 6px; background: #2a3442; border-radius: 3px; overflow: hidden; position: relative; }
+  .bar i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--bad); border-radius: 3px; }
+  .bar i.ok { background: var(--ok); } .bar i.mid { background: var(--warn); }
+  .bar b { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--fg); opacity: .6; }
+  .val { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+  .extra { font-family: var(--mono); font-size: .74rem; color: var(--muted); margin-top: 4px; }
+  #panelLive { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  #quality { grid-column: 1 / -1; display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .qrow { display: flex; gap: 6px; flex-wrap: wrap; }
+  .qinput { flex: 1 1 180px; min-width: 0; background: #0a0f15; color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: .85rem; }
+  .btn { background: var(--accent); color: #04121f; border: 0; border-radius: 10px; padding: 8px 14px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .btn.rec { background: var(--bad); color: #fff; }
+  .btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); font-weight: 500; }
+  .hint { font-size: .76rem; color: var(--muted); line-height: 1.4; margin: 0; }
+  .qtable { width: 100%; border-collapse: collapse; font-size: .74rem; font-variant-numeric: tabular-nums; }
+  .qtable th { text-align: left; color: var(--muted); font-weight: 500; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+  .qtable td { padding: 3px 4px; font-family: var(--mono); border-bottom: 1px solid #1c2430; }
+  .qtable td:first-child { font-family: var(--font); }
+  #loading { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; background: rgba(0,0,0,.6); }
+  #loading p { max-width: 30ch; line-height: 1.45; }
+  @media (max-width: 899px) { #view { height: 55%; } }
+  @media (min-width: 900px) {
+    #view { width: calc(100% - 360px); }
+    #panelLive { grid-template-columns: 1fr; }
+    #panel { left: auto; top: 0; width: 360px; max-height: none; grid-template-columns: 1fr; border-top: 0; border-left: 1px solid var(--line); padding-top: 70px; }
+  }
+</style>
+</head>
+<body>
+
+<section id="setup">
+  <div>
+    <h1>Qualità rilevamento MediaPipe</h1>
+    <p class="sub">Scegli la parte del corpo da tracciare. La pagina usa la camera e MediaPipe per mostrare i punti rilevati e la loro confidenza.</p>
+  </div>
+
+  <div>
+    <div class="label">Parte del corpo</div>
+    <div class="parts" id="parts">
+      <button class="part" data-part="hand" aria-pressed="true" type="button" id="part-hand">
+        <svg viewBox="0 0 48 48"><path d="M16 26V12a3 3 0 0 1 6 0v10M22 22V8a3 3 0 0 1 6 0v14M28 22V10a3 3 0 0 1 6 0v14M34 24v-6a3 3 0 0 1 6 0v10c0 9-6 16-14 16h-2c-6 0-9-3-12-8l-5-8a3 3 0 0 1 5-3l3 4"/></svg>
+        <strong>Mano</strong><small>21 punti per mano, fino a 2 mani</small>
+      </button>
+      <button class="part" data-part="leg" aria-pressed="false" type="button" id="part-leg">
+        <svg viewBox="0 0 48 48"><circle cx="20" cy="8" r="3"/><circle cx="26" cy="24" r="3"/><circle cx="22" cy="40" r="3"/><path d="M20 11l5 10M26 27l-3 10"/></svg>
+        <strong>Gamba</strong><small>Anca, ginocchio, caviglia</small>
+      </button>
+      <button class="part" data-part="foot" aria-pressed="false" type="button" id="part-foot">
+        <svg viewBox="0 0 48 48"><circle cx="16" cy="12" r="3"/><circle cx="12" cy="34" r="3"/><circle cx="38" cy="36" r="3"/><path d="M16 15l-3 16M15 34l20 2M14 36c6 4 16 4 21 2"/></svg>
+        <strong>Piede</strong><small>Caviglia, tallone, punta</small>
+      </button>
+    </div>
+  </div>
+
+  <div>
+    <div class="label">Camera</div>
+    <div class="row" id="cams">
+      <button class="seg" type="button" data-cam="environment" aria-pressed="true" id="cam-back">Posteriore</button>
+      <button class="seg" type="button" data-cam="user" aria-pressed="false" id="cam-front">Frontale</button>
+    </div>
+  </div>
+
+  <div>
+    <div class="label">Obiettivo</div>
+    <select id="lens" class="select"><option value="">Automatico (in base a posteriore/frontale)</option></select>
+    <label class="check"><input type="checkbox" id="wide" checked> Preferisci grandangolo (zoom minimo, se il telefono lo consente)</label>
+    <p class="note" id="lensNote">L'elenco degli obiettivi compare dopo il primo avvio della camera, quando il browser ha dato il permesso. Su iPhone di solito c'è "Fotocamera ultra grandangolare posteriore".</p>
+  </div>
+
+  <div>
+    <div class="label">Fotogrammi al secondo richiesti</div>
+    <div class="row" id="fpsSel">
+      <button class="seg" type="button" data-fps="30" aria-pressed="false" id="fps-30">30 fps</button>
+      <button class="seg" type="button" data-fps="60" aria-pressed="true" id="fps-60">60 fps</button>
+    </div>
+  </div>
+
+  <div id="footSideBox" hidden>
+    <div class="label">Piede in primo piano</div>
+    <div class="row" id="fsideSel">
+      <button class="seg" type="button" data-fside="auto" aria-pressed="true" id="fside-auto">Automatico</button>
+      <button class="seg" type="button" data-fside="R" aria-pressed="false" id="fside-R">Destro</button>
+      <button class="seg" type="button" data-fside="L" aria-pressed="false" id="fside-L">Sinistro</button>
+    </div>
+    <p class="note">Ripresa laterale, un piede alla volta. "Automatico" segue il piede con la confidenza più alta, cioè di solito quello più vicino alla camera.</p>
+  </div>
+
+  <div id="poseModelBox" hidden>
+    <div class="label">Modello pose</div>
+    <div class="row" id="models">
+      <button class="seg" type="button" data-model="lite" aria-pressed="false" id="model-lite">Lite</button>
+      <button class="seg" type="button" data-model="full" aria-pressed="true" id="model-full">Full</button>
+      <button class="seg" type="button" data-model="heavy" aria-pressed="false" id="model-heavy">Heavy</button>
+    </div>
+    <p class="note">Lite è il più veloce, Heavy il più preciso (circa 30 MB da scaricare). Full è un buon compromesso su smartphone.</p>
+    <div class="label" style="margin-top:14px">Media mobile dei punti</div>
+    <div class="row" id="smoothSel">
+      <button class="seg" type="button" data-smooth="1" aria-pressed="false" id="smooth-1">Spenta</button>
+      <button class="seg" type="button" data-smooth="2" aria-pressed="true" id="smooth-2">2 frame</button>
+      <button class="seg" type="button" data-smooth="3" aria-pressed="false" id="smooth-3">3 frame</button>
+    </div>
+    <p class="note">Fa la media della posizione degli ultimi N frame validi per ogni punto mostrato. I frame con confidenza sotto la soglia vengono esclusi. Riduce il tremolio, ma aggiunge un ritardo di circa mezzo frame per ogni frame in più (8 ms a 60 fps).</p>
+  </div>
+
+  <div>
+    <div class="label">Soglia di rilevamento</div>
+    <div class="slider">
+      <input type="range" id="thr" min="0.1" max="0.9" step="0.05" value="0.5">
+      <output id="thrOut">0.50</output>
+    </div>
+    <p class="note">Un punto conta come rilevato quando la sua confidenza supera la soglia. Vale anche come soglia minima per i modelli.</p>
+  </div>
+
+  <button id="start" type="button">Avvia camera</button>
+  <p class="err" id="setupErr" hidden></p>
+  <p class="note">Senza i modelli nella cartella mp/ serve internet al primo avvio per scaricarli. La pagina deve essere aperta in HTTPS perché il browser conceda la camera. Le immagini restano sul dispositivo.</p>
+</section>
+
+<section id="live" hidden>
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="view"></canvas>
+  <div class="topbar">
+    <button class="iconbtn" id="back" type="button" aria-label="Torna al setup">‹</button>
+    <span class="chip" id="partChip">Mano</span>
+    <span class="grow"></span>
+    <button class="iconbtn" id="flip" type="button" aria-label="Cambia camera">⟲ Camera</button>
+    <span class="chip" id="fps">-- fps</span>
+    <span class="chip" id="camChip"></span>
+  </div>
+  <div id="panel">
+    <div id="panelLive"></div>
+    <div id="quality">
+      <div class="qrow">
+        <input id="qLabel" class="qinput" type="text" placeholder="Condizione (es. luce naturale, 2 m, wide)" autocomplete="off">
+        <button class="btn" id="qBtn" type="button">Misura 10 s</button>
+        <button class="btn ghost" id="qCsv" type="button" hidden>Scarica CSV</button>
+      </div>
+      <p class="hint" id="qHint">Tieni la persona ferma nella posizione da valutare e premi "Misura 10 s". Il tremolio misura quanto si muovono i punti da un frame all'altro.</p>
+      <div id="qTable"></div>
+    </div>
+  </div>
+  <div id="loading"><p id="loadingText">Caricamento del modello…</p></div>
+</section>
+
+<script type="module">
+// Libreria MediaPipe locale (stessa cartella mp/ usata da index.html, funziona anche offline).
+const MP_BASE = "./mp";
+const MODELS = {
+  hand: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+  pose: m => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${m}/float16/1/pose_landmarker_${m}.task`,
+};
+// Modello locale in mp/ se presente (vedi scarica-modello.sh e readme), altrimenti dal CDN di Google.
+async function modelUrl(remote) {
+  const local = "./mp/" + remote.split("/").pop();
+  try { const r = await fetch(local, { method: "HEAD" }); if (r.ok) return local; } catch (e) {}
+  return remote;
+}
+
+// Indici dei landmark Pose (BlazePose 33 punti). "Sinistra/Destra" = lato della persona.
+const POSE = {
+  L: { hip: 23, knee: 25, ankle: 27, heel: 29, toe: 31 },
+  R: { hip: 24, knee: 26, ankle: 28, heel: 30, toe: 32 },
+};
+const PART_POINTS = { leg: ["hip", "knee", "ankle"], foot: ["ankle", "heel", "toe"] };
+const POINT_NAMES = { hip: "Anca", knee: "Ginocchio", ankle: "Caviglia", heel: "Tallone", toe: "Punta" };
+const PART_NAMES = { hand: "Mano", leg: "Gamba", foot: "Piede" };
+const SIDE_NAMES = { L: "Sinistra", R: "Destra" };
+const sideAdj = (part, side) => part === "foot" ? (side === "L" ? "sinistro" : "destro") : (side === "L" ? "sinistra" : "destra");
+const HAND_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
+
+const state = { part: "hand", cam: "environment", model: "full", thr: 0.5, fps: "60", smooth: "2", lens: "", wide: true, fside: "auto" };
+const $ = id => document.getElementById(id);
+
+// ---------- Setup UI ----------
+function bindGroup(containerId, attr, key, onChange) {
+  $(containerId).addEventListener("click", e => {
+    const b = e.target.closest(`[data-${attr}]`);
+    if (!b) return;
+    state[key] = b.dataset[attr];
+    for (const x of $(containerId).querySelectorAll(`[data-${attr}]`)) x.setAttribute("aria-pressed", String(x === b));
+    onChange && onChange();
+  });
+}
+const syncSetup = () => { $("poseModelBox").hidden = state.part === "hand"; $("footSideBox").hidden = state.part !== "foot"; };
+bindGroup("parts", "part", "part", syncSetup);
+bindGroup("cams", "cam", "cam");
+bindGroup("models", "model", "model");
+bindGroup("fpsSel", "fps", "fps");
+bindGroup("smoothSel", "smooth", "smooth");
+bindGroup("fsideSel", "fside", "fside");
+$("lens").addEventListener("change", e => { state.lens = e.target.value; });
+$("wide").addEventListener("change", e => { state.wide = e.target.checked; });
+$("thr").addEventListener("input", e => { state.thr = +e.target.value; $("thrOut").textContent = state.thr.toFixed(2); });
+try {
+  const saved = JSON.parse(localStorage.getItem("mp-test-setup") || "null");
+  if (saved) {
+    for (const [k, attr, box] of [["part","part","parts"],["cam","cam","cams"],["model","model","models"],["fps","fps","fpsSel"],["smooth","smooth","smoothSel"],["fside","fside","fsideSel"]]) {
+      const b = $(box).querySelector(`[data-${attr}="${saved[k]}"]`); if (b) b.click();
+    }
+    if (typeof saved.wide === "boolean") { state.wide = saved.wide; $("wide").checked = saved.wide; }
+    if (saved.lens) state.lens = saved.lens;
+    if (saved.thr) { $("thr").value = saved.thr; $("thr").dispatchEvent(new Event("input")); }
+  }
+} catch {}
+syncSetup();
+
+// ---------- MediaPipe ----------
+let vision = null, mp = null;
+const landmarkers = {}; // cache per chiave
+async function getVision() {
+  if (!mp) mp = await import(`${MP_BASE}/vision_bundle.mjs`);
+  if (!vision) vision = await mp.FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
+  return vision;
+}
+async function createWithFallback(Cls, opts) {
+  try { return { lm: await Cls.createFromOptions(vision, { ...opts, baseOptions: { ...opts.baseOptions, delegate: "GPU" } }), delegate: "GPU" }; }
+  catch (e) { console.warn("GPU non disponibile, uso CPU", e); }
+  return { lm: await Cls.createFromOptions(vision, { ...opts, baseOptions: { ...opts.baseOptions, delegate: "CPU" } }), delegate: "CPU" };
+}
+async function getLandmarker() {
+  await getVision();
+  const key = state.part === "hand" ? `hand-${state.thr}` : `pose-${state.model}-${state.thr}`;
+  if (landmarkers[key]) return landmarkers[key];
+  let r;
+  if (state.part === "hand") {
+    r = await createWithFallback(mp.HandLandmarker, {
+      baseOptions: { modelAssetPath: await modelUrl(MODELS.hand) }, runningMode: "VIDEO", numHands: 2,
+      minHandDetectionConfidence: state.thr, minHandPresenceConfidence: state.thr, minTrackingConfidence: state.thr,
+    });
+  } else {
+    r = await createWithFallback(mp.PoseLandmarker, {
+      baseOptions: { modelAssetPath: await modelUrl(MODELS.pose(state.model)) }, runningMode: "VIDEO", numPoses: 1,
+      minPoseDetectionConfidence: state.thr, minPosePresenceConfidence: state.thr, minTrackingConfidence: state.thr,
+    });
+  }
+  landmarkers[key] = r;
+  return r;
+}
+
+// ---------- Camera ----------
+const video = $("video"), canvas = $("view"), ctx = canvas.getContext("2d");
+let stream = null, running = false, current = null, rafId = 0;
+
+async function openCamera() {
+  stopCamera();
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("Questo browser non dà accesso alla camera. Apri la pagina in HTTPS con Chrome o Safari.");
+  const fps = +state.fps;
+  const base = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: fps, min: Math.min(24, fps) } };
+  const lens = state.lens ? { deviceId: { exact: state.lens } } : { facingMode: { ideal: state.cam } };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...base, ...lens } });
+  } catch (e) {
+    if (e?.name !== "OverconstrainedError") throw e;
+    // il dispositivo non regge i vincoli: riprova senza minimo di fps e con l'obiettivo automatico
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: fps }, facingMode: { ideal: state.cam } } });
+  }
+  const track = stream.getVideoTracks()[0];
+  camInfo.zoom = "";
+  if (state.wide) {
+    try {
+      const caps = track.getCapabilities?.() || {};
+      if (caps.zoom && caps.zoom.min < (track.getSettings().zoom ?? 1)) {
+        await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] });
+        camInfo.zoom = ` · zoom ${caps.zoom.min}x`;
+      }
+    } catch (e) { console.warn("zoom non applicabile", e); }
+  }
+  const st = track.getSettings();
+  camInfo.label = track.label || "";
+  camInfo.text = `${st.width}×${st.height} · richiesti ${fps} fps, dichiarati ${st.frameRate ? Math.round(st.frameRate) : "?"}${camInfo.zoom}`;
+  video.srcObject = stream;
+  await video.play();
+  countCamFrames();
+  fillLenses();
+  if (!video.videoWidth) await new Promise(r => video.addEventListener("loadedmetadata", r, { once: true }));
+}
+const camInfo = { text: "", label: "", zoom: "" };
+async function fillLenses() {
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput" && d.label);
+    if (!devs.length) return;
+    const sel = $("lens");
+    sel.length = 1;
+    devs.forEach((d, i) => sel.add(new Option(d.label || `Camera ${i + 1}`, d.deviceId)));
+    sel.value = devs.some(d => d.deviceId === state.lens) ? state.lens : "";
+    state.lens = sel.value;
+    $("lensNote").textContent = "Scegli \"Automatico\" o un obiettivo preciso. Se l'obiettivo scelto non regge i 60 fps la camera torna in automatico.";
+  } catch {}
+}
+fillLenses();
+function stopCamera() {
+  if (stream) for (const t of stream.getTracks()) t.stop();
+  stream = null;
+}
+const isMirrored = () => state.cam === "user";
+
+// ---------- Statistiche ----------
+const WINDOW = 60; // ultimi N frame per il tasso di rilevamento
+const hist = {};
+function track(key, detected) {
+  const h = hist[key] || (hist[key] = []);
+  h.push(detected ? 1 : 0);
+  if (h.length > WINDOW) h.shift();
+  return h.reduce((a, b) => a + b, 0) / h.length;
+}
+let frames = 0, fpsT = performance.now(), inferMs = 0, camFrames = 0;
+function countCamFrames() {
+  if (!video.requestVideoFrameCallback) return;
+  const cb = () => { camFrames++; if (stream) video.requestVideoFrameCallback(cb); };
+  video.requestVideoFrameCallback(cb);
+}
+
+// ---------- Disegno ----------
+const cls = v => v >= state.thr ? "ok" : v >= state.thr * 0.6 ? "mid" : "";
+const pct = v => `${Math.round(v * 100)}%`;
+function px(p) {
+  const x = isMirrored() ? (1 - p.x) * canvas.width : p.x * canvas.width;
+  return [x, p.y * canvas.height];
+}
+function drawFrame() {
+  if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  }
+  ctx.save();
+  if (isMirrored()) { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+}
+const scale = () => Math.max(2, canvas.width / 320);
+function line(a, b, color, alpha = 1) {
+  const [x1, y1] = px(a), [x2, y2] = px(b);
+  ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = scale() * 1.4;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.globalAlpha = 1;
+}
+function point(p, color, ok = true, r = 1) {
+  const [x, y] = px(p);
+  ctx.globalAlpha = ok ? 1 : 0.35;
+  ctx.fillStyle = color; ctx.strokeStyle = "#000"; ctx.lineWidth = scale() * 0.6;
+  ctx.beginPath(); ctx.arc(x, y, scale() * 2.4 * r, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.globalAlpha = 1;
+}
+function label(p, text, color) {
+  const [x, y] = px(p);
+  ctx.font = `600 ${Math.round(scale() * 6)}px system-ui, sans-serif`;
+  ctx.fillStyle = "rgba(0,0,0,.6)";
+  const w = ctx.measureText(text).width;
+  ctx.fillRect(x + scale() * 4, y - scale() * 6, w + scale() * 4, scale() * 8);
+  ctx.fillStyle = color; ctx.fillText(text, x + scale() * 6, y);
+}
+function angle(a, b, c) { // angolo in b, in gradi (coordinate 2D normalizzate sull'aspetto del frame)
+  const ar = canvas.width / canvas.height;
+  const v1 = [(a.x - b.x) * ar, a.y - b.y], v2 = [(c.x - b.x) * ar, c.y - b.y];
+  const d = Math.hypot(...v1) * Math.hypot(...v2);
+  return d ? Math.acos(Math.max(-1, Math.min(1, (v1[0]*v2[0] + v1[1]*v2[1]) / d))) * 180 / Math.PI : NaN;
+}
+
+// ---------- Pannello ----------
+function metricRow(name, v) {
+  return `<div class="metric"><span>${name}</span><div class="bar"><i class="${cls(v)}" style="width:${(v*100).toFixed(0)}%"></i><b style="left:${state.thr*100}%"></b></div><span class="val">${pct(v)}</span></div>`;
+}
+function sideBlock(title, color, ok, rows, extra) {
+  return `<div class="side"><h3><span class="dot ${ok}"></span>${title}${color ? `<span class="swatch" style="background:${color}"></span>` : ""}</h3>${rows}${extra ? `<div class="extra">${extra}</div>` : ""}</div>`;
+}
+
+function renderHand(res) {
+  const hands = { Left: null, Right: null };
+  (res.landmarks || []).forEach((lm, i) => {
+    const h = res.handednesses?.[i]?.[0] || res.handedness?.[i]?.[0];
+    // MediaPipe assume un'immagine specchiata (selfie). Al modello passiamo sempre il frame non specchiato,
+    // quindi invertiamo l'etichetta. Ipotesi da verificare sul telefono.
+    let name = h?.categoryName || (i ? "Right" : "Left");
+    name = name === "Left" ? "Right" : "Left";
+    if (!hands[name]) hands[name] = { lm, score: h?.score ?? 0 };
+  });
+  let html = "";
+  for (const [key, side, color] of [["Left", "L", "var(--left)"], ["Right", "R", "var(--right)"]]) {
+    const h = hands[key];
+    const c = side === "L" ? "#ff8a3d" : "#4fb3ff";
+    if (h) {
+      for (const [a, b] of HAND_CONN) line(h.lm[a], h.lm[b], c, 0.9);
+      h.lm.forEach((p, i) => point(p, i === 0 ? "#fff" : c, true, [4, 8, 12, 16, 20].includes(i) ? 1.1 : 0.8));
+      label(h.lm[0], `${SIDE_NAMES[side]} ${pct(h.score)}`, c);
+    }
+    const hs = side === "L" ? "sx" : "dx";
+    const href = h ? Math.hypot((h.lm[0].x - h.lm[9].x) * canvas.width, (h.lm[0].y - h.lm[9].y) * canvas.height) : 0;
+    for (const [i, n] of [[0, "Polso"], [4, "Pollice"], [8, "Indice"], [12, "Medio"], [16, "Anulare"], [20, "Mignolo"]])
+      qAdd(`${n} ${hs}`, h ? h.score : 0, h ? h.lm[i] : null, href);
+    const rate = track(`hand-${side}`, !!h);
+    const score = h?.score ?? 0;
+    html += sideBlock(`Mano ${sideAdj("hand", side)}`, color, h ? cls(score) : "",
+      metricRow("Confidenza", score) + metricRow("Rilevata", rate),
+      h ? "21 punti tracciati" : "Non rilevata");
+  }
+  return html;
+}
+
+const smoothBuf = {};
+function smoothPose(lm) {
+  const n = +state.smooth;
+  if (!lm) { for (const k in smoothBuf) delete smoothBuf[k]; return lm; }
+  if (n <= 1) return lm;
+  const out = lm.slice();
+  for (const side of ["L", "R"]) for (const k of PART_POINTS[state.part]) {
+    const i = POSE[side][k];
+    const b = smoothBuf[i] || (smoothBuf[i] = []);
+    // i frame con visibilità sotto soglia non entrano nella media e il punto viene mostrato com'è
+    if ((lm[i].visibility ?? 0) < state.thr) continue;
+    b.push(lm[i]); while (b.length > n) b.shift();
+    out[i] = { ...lm[i], x: b.reduce((a, p) => a + p.x, 0) / b.length, y: b.reduce((a, p) => a + p.y, 0) / b.length, z: b.reduce((a, p) => a + p.z, 0) / b.length };
+  }
+  return out;
+}
+
+// Piede in primo piano: scelto dall'utente o, in automatico, il lato con confidenza media più alta (con isteresi).
+const footSel = { side: "R", ema: { L: 0, R: 0 } };
+function footSide(lm) {
+  if (state.fside !== "auto") return state.fside;
+  if (lm) for (const sd of ["L", "R"]) {
+    const m = ["ankle", "heel", "toe"].reduce((a, k) => a + (lm[POSE[sd][k]].visibility ?? 0), 0) / 3;
+    footSel.ema[sd] = footSel.ema[sd] * 0.8 + m * 0.2;
+  }
+  const other = footSel.side === "L" ? "R" : "L";
+  if (footSel.ema[other] > footSel.ema[footSel.side] + 0.1) footSel.side = other;
+  return footSel.side;
+}
+
+function renderPose(res) {
+  const lm = smoothPose(res.landmarks?.[0]);
+  const pts = PART_POINTS[state.part];
+  let html = "";
+  const sides = state.part === "foot" ? [footSide(lm)] : ["L", "R"];
+  for (const side of sides) {
+    const color = side === "L" ? "#ff8a3d" : "#4fb3ff";
+    const idx = POSE[side];
+    const vis = k => lm ? (lm[idx[k]].visibility ?? 0) : 0;
+    const allOk = !!lm && pts.every(k => vis(k) >= state.thr);
+    const minV = lm ? Math.min(...pts.map(vis)) : 0;
+    if (lm) {
+      const W = canvas.width, H = canvas.height;
+      const [ra, rb] = state.part === "foot" ? ["heel", "toe"] : ["knee", "ankle"];
+      const ref = Math.hypot((lm[idx[ra]].x - lm[idx[rb]].x) * W, (lm[idx[ra]].y - lm[idx[rb]].y) * H);
+      for (const k of pts) qAdd(`${POINT_NAMES[k]} ${side === "L" ? "sx" : "dx"}`, vis(k), lm[idx[k]], ref);
+    } else for (const k of pts) qAdd(`${POINT_NAMES[k]} ${side === "L" ? "sx" : "dx"}`, 0, null, 0);
+    if (lm) {
+      const chain = state.part === "leg" ? [["hip","knee"],["knee","ankle"]] : [["ankle","heel"],["heel","toe"],["toe","ankle"]];
+      for (const [a, b] of chain) line(lm[idx[a]], lm[idx[b]], color, Math.min(vis(a), vis(b)) >= state.thr ? 0.95 : 0.3);
+      for (const k of pts) point(lm[idx[k]], color, vis(k) >= state.thr);
+    }
+    const rate = track(`${state.part}-${side}`, allOk);
+    let extra = lm ? "" : "Persona non rilevata";
+    if (lm && state.part === "leg") {
+      const a = angle(lm[idx.hip], lm[idx.knee], lm[idx.ankle]);
+      extra = `Angolo ginocchio ${isNaN(a) ? "--" : Math.round(a) + "°"}`;
+      if (vis("knee") >= state.thr) label(lm[idx.knee], `${Math.round(a)}°`, color);
+    } else if (lm && state.part === "foot") {
+      const a = angle(lm[idx.knee], lm[idx.ankle], lm[idx.toe]);
+      extra = `Angolo caviglia ${isNaN(a) ? "--" : Math.round(a) + "°"}`;
+    }
+    html += sideBlock(`${PART_NAMES[state.part]} ${sideAdj(state.part, side)}${state.part === "foot" && state.fside === "auto" ? " (auto)" : ""}`, color, lm ? cls(minV) : "",
+      pts.map(k => metricRow(POINT_NAMES[k], vis(k))).join("") + metricRow("Rilevata", rate), extra);
+  }
+  return html;
+}
+
+// ---------- Misura di qualità ----------
+// Per ogni punto: % di frame rilevati (confidenza sopra soglia), confidenza media e tremolio,
+// cioè lo spostamento mediano da un frame al successivo in % di una lunghezza di riferimento
+// (piede: tallone-punta; gamba: ginocchio-caviglia; mano: polso-base del medio).
+const Q_MS = 10000;
+const quality = { on: false, t0: 0, frames: [], cur: null, result: null };
+function qBegin(t) { if (quality.on) quality.cur = { t: t - quality.t0, pts: {} }; }
+function qAdd(name, vis, p, ref) {
+  if (!quality.cur) return;
+  quality.cur.pts[name] = p ? { vis, x: p.x * canvas.width, y: p.y * canvas.height, ref } : { vis: 0 };
+}
+function qEnd(fpsInfo) {
+  if (!quality.cur) return;
+  quality.cur.inferMs = fpsInfo; quality.frames.push(quality.cur); quality.cur = null;
+  if (performance.now() - quality.t0 >= Q_MS) qFinish();
+  else $("qHint").textContent = `Misura in corso… ${((Q_MS - (performance.now() - quality.t0)) / 1000).toFixed(1)} s`;
+}
+const medianOf = a => { const s = a.filter(Number.isFinite).sort((x, y) => x - y); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : NaN; };
+function qFinish() {
+  quality.on = false;
+  const F = quality.frames, names = [...new Set(F.flatMap(f => Object.keys(f.pts)))];
+  const dur = F.length > 1 ? (F[F.length - 1].t - F[0].t) / 1000 : NaN;
+  const rows = names.map(n => {
+    const seq = F.map(f => f.pts[n] || { vis: 0 });
+    const ok = seq.filter(p => p.vis >= state.thr && p.x != null);
+    const jit = [];
+    for (let i = 1; i < seq.length; i++) {
+      const a = seq[i - 1], b = seq[i];
+      if (a.vis >= state.thr && b.vis >= state.thr && a.x != null && b.x != null && b.ref > 0) jit.push(Math.hypot(b.x - a.x, b.y - a.y) / b.ref * 100);
+    }
+    return { name: n, detected: F.length ? ok.length / F.length * 100 : 0, vis: seq.length ? seq.reduce((s, p) => s + (p.vis || 0), 0) / seq.length * 100 : 0, jitter: medianOf(jit), jitter90: jit.length ? [...jit].sort((x, y) => x - y)[Math.floor(jit.length * 0.9)] : NaN };
+  });
+  quality.result = { rows, frames: F.length, fps: dur ? (F.length - 1) / dur : NaN, inferMs: medianOf(F.map(f => f.inferMs)) };
+  renderQuality();
+}
+const f1 = (x, d = 1) => Number.isFinite(x) ? x.toFixed(d) : "--";
+function renderQuality() {
+  const r = quality.result;
+  $("qBtn").textContent = "Misura 10 s"; $("qBtn").classList.remove("rec");
+  $("qCsv").hidden = !r;
+  if (!r) { $("qTable").innerHTML = ""; return; }
+  $("qHint").textContent = `${r.frames} frame elaborati a ${f1(r.fps)} fps, ${f1(r.inferMs, 0)} ms per frame.`;
+  $("qTable").innerHTML = `<table class="qtable"><thead><tr><th>Punto</th><th>Rilevato</th><th>Conf. media</th><th>Tremolio</th><th>Tremolio P90</th></tr></thead><tbody>${
+    r.rows.map(x => `<tr><td>${x.name}</td><td>${f1(x.detected, 0)}%</td><td>${f1(x.vis, 0)}%</td><td>${f1(x.jitter, 2)}%</td><td>${f1(x.jitter90, 2)}%</td></tr>`).join("")}</tbody></table>`;
+}
+function resetQuality() { Object.assign(quality, { on: false, frames: [], cur: null, result: null }); $("qHint").textContent = "Tieni la persona ferma nella posizione da valutare e premi \"Misura 10 s\". Il tremolio misura quanto si muovono i punti da un frame all'altro."; renderQuality(); }
+$("qBtn").addEventListener("click", () => {
+  if (quality.on) { qFinish(); return; }
+  Object.assign(quality, { on: true, t0: performance.now(), frames: [], cur: null, result: null });
+  $("qBtn").textContent = "Ferma"; $("qBtn").classList.add("rec"); $("qCsv").hidden = true; $("qTable").innerHTML = "";
+});
+$("qCsv").addEventListener("click", () => {
+  const r = quality.result; if (!r) return;
+  const cond = ($("qLabel").value || "").replace(/[\r\n,]/g, " ");
+  const lines = [
+    `# condizione,${cond}`, `# data,${new Date().toISOString()}`, `# parte,${PART_NAMES[state.part]}`,
+    `# modello,${state.part === "hand" ? "hand_landmarker" : "pose_" + state.model}`, `# delegate,${current?.delegate ?? ""}`,
+    `# soglia,${state.thr}`, `# media_mobile_frame,${state.part === "hand" ? 1 : state.smooth}`, `# camera,${camInfo.text}`, `# obiettivo,${camInfo.label.replace(/,/g, " ")}`,
+    `# frame,${r.frames}`, `# fps_elaborati,${f1(r.fps, 2)}`, `# ms_per_frame,${f1(r.inferMs, 1)}`,
+    "punto,rilevato_pct,confidenza_media_pct,tremolio_mediano_pct,tremolio_p90_pct",
+    ...r.rows.map(x => [x.name, f1(x.detected, 1), f1(x.vis, 1), f1(x.jitter, 3), f1(x.jitter90, 3)].join(",")),
+    "", "t_ms,punto,confidenza,x_px,y_px",
+    ...quality.frames.flatMap(f => Object.entries(f.pts).map(([n, p]) => [Math.round(f.t), n, (p.vis ?? 0).toFixed(3), p.x != null ? p.x.toFixed(1) : "", p.y != null ? p.y.toFixed(1) : ""].join(","))),
+  ];
+  const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = `qualita_${state.part}_${(cond || "senza-nome").replace(/[^a-z0-9]+/gi, "-").slice(0, 40)}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+});
+
+let lastVideoTime = -1, panelT = 0;
+function loop() {
+  if (!running) return;
+  rafId = requestAnimationFrame(loop);
+  if (video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const t0 = performance.now();
+  let res;
+  try { res = current.lm.detectForVideo(video, t0); } catch (e) { console.error(e); return; }
+  inferMs = inferMs * 0.9 + (performance.now() - t0) * 0.1;
+  drawFrame();
+  qBegin(t0);
+  const html = state.part === "hand" ? renderHand(res) : renderPose(res);
+  const now = performance.now();
+  qEnd(performance.now() - t0);
+  if (now - panelT > 100) { $("panelLive").innerHTML = html; panelT = now; } // aggiorna il pannello ~10 volte al secondo
+  frames++;
+  if (now - fpsT > 1000) {
+    const k = 1000 / (now - fpsT);
+    const cam = video.requestVideoFrameCallback ? `cam ${Math.round(camFrames * k)} · ` : "";
+    $("fps").textContent = `${cam}elab ${Math.round(frames * k)} fps · ${inferMs.toFixed(0)} ms`;
+    frames = 0; camFrames = 0; fpsT = now;
+  }
+}
+
+// ---------- Avvio / stop ----------
+async function start() {
+  $("setupErr").hidden = true;
+  $("start").disabled = true;
+  try { localStorage.setItem("mp-test-setup", JSON.stringify(state)); } catch {}
+  $("setup").hidden = true; $("live").hidden = false;
+  $("partChip").textContent = PART_NAMES[state.part] + (state.part !== "hand" ? ` · ${state.model} · media ${state.smooth}` : "");
+  $("partChip").title = "";
+  $("loading").hidden = false;
+  $("panelLive").innerHTML = ""; resetQuality();
+  for (const k in hist) delete hist[k];
+  for (const k in smoothBuf) delete smoothBuf[k];
+  try {
+    $("loadingText").textContent = "Apertura della camera…";
+    await openCamera();
+    $("loadingText").textContent = "Caricamento del modello MediaPipe…";
+    current = await getLandmarker();
+    $("loading").hidden = true;
+    $("partChip").textContent += ` · ${current.delegate}`;
+    $("camChip").textContent = camInfo.text; $("camChip").title = camInfo.label;
+    running = true; lastVideoTime = -1; fpsT = performance.now(); frames = 0;
+    loop();
+  } catch (e) {
+    console.error(e);
+    stop();
+    const msg = e?.name === "NotAllowedError" ? "Permesso camera negato. Consenti l'accesso alla camera nelle impostazioni del browser e riprova."
+      : e?.name === "NotFoundError" ? "Nessuna camera trovata su questo dispositivo."
+      : `Avvio non riuscito: ${e?.message || e}`;
+    $("setupErr").textContent = msg; $("setupErr").hidden = false;
+  } finally {
+    $("start").disabled = false;
+  }
+}
+function stop() {
+  running = false; cancelAnimationFrame(rafId); stopCamera();
+  $("live").hidden = true; $("setup").hidden = false;
+}
+$("start").addEventListener("click", start);
+$("back").addEventListener("click", stop);
+$("flip").addEventListener("click", async () => {
+  state.cam = state.cam === "user" ? "environment" : "user";
+  for (const x of $("cams").querySelectorAll("[data-cam]")) x.setAttribute("aria-pressed", String(x.dataset.cam === state.cam));
+  running = false; cancelAnimationFrame(rafId);
+  state.lens = ""; $("lens").value = "";
+  try { await openCamera(); $("camChip").textContent = camInfo.text; running = true; lastVideoTime = -1; loop(); }
+  catch (e) { stop(); $("setupErr").textContent = `Cambio camera non riuscito: ${e?.message || e}`; $("setupErr").hidden = false; }
+});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
+document.addEventListener("visibilitychange", () => { if (document.hidden && running) stop(); });
+</script>
+</body>
+</html>
